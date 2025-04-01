@@ -1,0 +1,501 @@
+<title>Pacman 3x3 - A Qnetwork Demo</title>
+<h1><center>Pacman 3x3</center></h1>
+<h1><center>Open DevTools to see</center></h1>
+<div>
+    <center><img src="https://i.imgur.com/UZJ5PBU.png"></center>
+</div>
+<div>
+    <center>A Q-network demo by Dan D.Q. Dinh</center><br>
+    <center>
+        JS inside HTML: 
+        <a target="_blank" href="https://github.com/pacman3x3/pacman3x3.github.io"
+            >https://github.com/pacman3x3/pacman3x3.github.io</a>
+    </center>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.22.0/tf.min.js" integrity="sha512-pLw8dUVrlqzbcwSDkXmF732uRzE8+VFKaTdoBYCqdvtK3q7wza1sQQQEMJP+jYOER4zU1MusZTT2bRzGVRDGZg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+// Q-network test
+ 
+// Shorthands
+const log  = console.log;
+const logw = console.warn;
+const loge = console.error;
+ 
+// Globals
+const NROW   = 3;
+const NCOL   = 3;
+const A_MAX  = 4; // 4 actions clockwise from north
+const EP_LEN = 7; // Episode length: 7 actions
+const NORTH  = 0;
+const EAST   = 1;
+const SOUTH  = 2;
+const WEST   = 3;
+const DIRS   = ["North","East\x20","South","West\x20"];
+ 
+function OX_INDENT_getmaxrewardsum(){}
+function $_____UTILS_____(){}
+ 
+// Random
+function rand() {
+    return Math.random();
+}
+ 
+// To str
+function str(Obj) {
+    return JSON.stringify(Obj);
+}
+ 
+// Clone var
+function clone(Var) {
+    return JSON.parse(JSON.stringify(Var));
+}
+ 
+// Convert (S,A) to tensor for input
+function saq2tensor(S,A, value){
+    // Can't set directly in q-network, fit (tuning) it instead
+    var X = S.Env.toString().split(",").map(V => parseFloat(V));
+    X.push(S.Actor.row);
+    X.push(S.Actor.col);
+    X.push(A);
+    X = new Array(X);
+ 
+    var Inp = tf.tensor(X);
+    var Exp = tf.tensor([[value]]);
+    return [Inp,Exp];
+}
+ 
+function $_____CLASS_____(){}
+ 
+// Q-network
+// Bellman: Q = Q + B*M = Q + B*(R+D*max(Qnext) - Q)
+// B is learning rate, M is temporal difference.
+// Coding convention exception: Bellman vars are all in uppercase
+class qnetwork {
+    static Env; 
+    static Actor; 
+    static Orig_Env;
+    static Orig_Actor;
+    static Network;    
+    static B;             // Learning rate
+    static D;             // Discount factor
+    static Rmax;          // Max possible sum of rewards
+    static episodes;      // Number of episodes (number of runs through the episode)    
+    static xrate;         // Current explore rate
+    static xrate_change;  // Reduction of xrate after each action
+    static tuning_epochs; // For learning updated q-value
+    static qnet_lr;       // Q-network learning rate
+ 
+    // Set a value in q-network
+    // S: State of both env and actor
+    // A: Action (0..3) clockwise from north
+    static async set_qvalue(States,Actions, Qvalues){
+        var Inp=[], Exp=[];
+ 
+        for (let i=0; i<States.length; i++){
+            let [Inp_Temp,Exp_Temp] = saq2tensor(States[i],Actions[i], Qvalues[i]);
+            Inp = Inp.concat(Inp_Temp.arraySync());
+            Exp = Exp.concat(Exp_Temp.arraySync());
+        }       
+        Inp = tf.tensor(Inp);
+        Exp = tf.tensor(Exp);    
+ 
+        var Fit_Res = await thisclass.Network.fit(Inp,Exp,{ 
+            epochs:thisclass.tuning_epochs, batchSize:States.length, callbacks:{}
+        });
+    }
+ 
+    // Get a value in q-network
+    // S: State of both env and actor
+    // A: Action (0..3) clockwise from north
+    static async get_qvalue(S,A){
+        var [Inp,Exp] = saq2tensor(S,A,0);
+        var U         = (await thisclass.Network.predict(Inp)).arraySync();
+        return U[0][0];
+    }
+ 
+    // Q-function 
+    // Returns estimated sum of Reward by action A and future Rewards
+    static async q(S,A){
+        return await thisclass.get_qvalue(S,A);
+    }
+ 
+    // Get current state or custom state
+    // Returns a string presents the state (of both env and actor)
+    static s(Env=null, Actor=null){
+        if (Env==null || Actor==null)
+            return {Env:clone(thisclass.Env), Actor:clone(thisclass.Actor)};
+ 
+        return {Env:clone(Env),Actor:clone(Actor)};        
+    }    
+ 
+    // Reward of taking action A at state S
+    static r(S,A, log_validity=true){
+        var Env   = S.Env;
+        var Actor = S.Actor;
+ 
+        // Check if Actor is at invalid coords (where Env value is 1, actor can't be there)
+        if (Env[Actor.row][Actor.col] != 0){
+            if (log_validity)
+                loge(`qnetwork.r: Bad actor coords, Env=${str(Env)}, Actor=${str(Actor)}`);
+ 
+            return -1;
+        }
+ 
+        // Check if action 'a' violates the rules
+        // Can't go North
+        if (Actor.row==0 && A==NORTH){
+            if (log_validity)
+                loge(`qnetwork.r: Can't go north, Env=${str(Env)}, Actor=${str(Actor)}, A=${A}`);
+ 
+            return -1;
+        }
+        // Can't go East
+        if (Actor.col==NCOL-1 && A==EAST){
+            if (log_validity)
+                loge(`qnetwork.r: Can't go east,\x20 Env=${str(Env)}, Actor=${str(Actor)}, A=${A}`);
+ 
+            return -1;
+        }
+        // Can't go South
+        if (Actor.row==NROW-1 && A==SOUTH){
+            if (log_validity)
+                loge(`qnetwork.r: Can't go south, Env=${str(Env)}, Actor=${str(Actor)}, A=${A}`);
+ 
+            return -1;
+        }
+        // Can't go West
+        if (Actor.col==0 && A==WEST){
+            if (log_validity)
+                loge(`qnetwork.r: Can't go west,\x20 Env=${str(Env)}, Actor=${str(Actor)}, A=${A}`);
+ 
+            return -1;
+        }
+ 
+        // All valid, now get reward
+        if (A==NORTH)
+            return Env[Actor.row-1][Actor.col];
+        if (A==EAST)
+            return Env[Actor.row  ][Actor.col+1];
+        if (A==SOUTH)
+            return Env[Actor.row+1][Actor.col];
+        if (A==WEST)
+            return Env[Actor.row  ][Actor.col-1];
+    }
+ 
+    // Apply action
+    static apply_action(Env,Actor,A){
+        var R = r(s(Env,Actor), A);
+ 
+        // Invalid action
+        if (R==-1){
+            loge(`qnetwork.apply_action: Invalid action, Env=${str(Env)}, Actor=${str(Actor)}, A=${A}`);
+            return new Error("bad-action");
+        }
+ 
+        // Change actor coords
+        if (A==NORTH)
+            Actor.row--;
+        else
+        if (A==EAST)
+            Actor.col++;
+        else
+        if (A==SOUTH)
+            Actor.row++;
+        else
+        if (A==WEST)
+            Actor.col--;
+ 
+        // Pacman eats the food at his coords
+        var row       = Actor.row;
+        var col       = Actor.col;
+        Env[row][col] = 0;
+        return clone(Actor);
+    }
+ 
+    // Get valid actions
+    static get_valid_actions(S){
+        var Possible_Actions = [];
+        var log_validity;
+ 
+        for (let A=0; A<A_MAX; A++)
+            if (r(S,A, log_validity=false) >= 0)
+                Possible_Actions.push(A);
+ 
+        return Possible_Actions;
+    }
+ 
+    // Get random valid action
+    static get_rand_action(S){
+        var Actions = thisclass.get_valid_actions(S);
+        var n       = Actions.length;
+        var i       = Math.floor(rand()*n);
+        return Actions[i];
+    }
+ 
+    // Get best action based on q-network
+    static async get_best_action(S){    
+        var Valid_Actions = thisclass.get_valid_actions(S);
+        var Qmax          = -Number.MAX_SAFE_INTEGER;
+        var Amax;
+ 
+        for (let A=0; A<A_MAX; A++){
+            let Q = await q(S,A);
+ 
+            if (Valid_Actions.indexOf(A)>=0 && Q>Qmax){
+                Qmax = Q;
+                Amax = A;
+            }
+        }
+        return Amax;
+    }
+ 
+    // Q-network update at S:A (whole episode)
+    static async q_update(S, Actions){
+        var A, States=[], Qnews=[];
+ 
+        for (A of Actions){
+            // Q = Q + B*M = Q + B*(R+D*max(Qnext) - Q)
+            let B = thisclass.B; // Learning rate
+            let R = r(S,A);      // Reward
+            let D = thisclass.D; // Discount
+ 
+            // Find next state
+            let Env        = S.Env;
+            let Actor      = S.Actor;
+            let Env_Next   = clone(S.Env);
+            let Actor_Next = clone(S.Actor);
+            thisclass.apply_action(Env_Next,Actor_Next, A);
+ 
+            // Find max(Qnext)            
+            let Snext = s(Env_Next,Actor_Next);
+            let Rnext = -Number.MAX_SAFE_INTEGER;
+            let Anext;
+            let log_validity;
+ 
+            for (let A2=0; A2<A_MAX; A2++){ // In this Pacman game, there's always a valid move.
+                let Rtest = r(Snext,A2, log_validity=false);
+ 
+                if (Rtest > Rnext){
+                    Rnext = Rtest;
+                    Anext = A;
+                }
+            }
+            let Qnext = await q(Snext,Anext);
+ 
+            // Value to update q-network: Qnew (aka Qtarget)
+            let Scur = s(Env,Actor);
+            let Qcur = await q(Scur,A);
+            let Qnew = Qcur + B*(R+D*Qnext - Qcur);
+            States.push(Scur);
+            Qnews .push(Qnew);
+ 
+            // Next state
+            S = s(Env_Next,Actor_Next);
+        }
+ 
+        // Train q-network by whole episode experience
+        await thisclass.set_qvalue(States,Actions, Qnews);
+    }
+ 
+    // Init q-network (sizes: 2^9*9 rows, 4 cols)
+    // ie. 512*9*4 values = 18 432 values
+    static async init_qnetwork(){
+        var Env   = [[0,0,0],[0,0,0],[0,0,0]];
+        var Actor = {row:0, col:0};
+ 
+        // Random params (weights, biases) for network
+        // Layers 200*100 roughly equals 2^9(env) * 9(locs) * 4(actions)
+        var X  = tf.input({shape: [9+2+1]});
+        var H1 = tf.layers.dense({
+                     units:200, activation:'relu', kernelInitializer:'randomUniform'
+                 }).apply(X);
+        var H2 = tf.layers.dense({
+                     units:100, activation:'relu', kernelInitializer:'randomUniform'
+                 }).apply(H1);
+        var U  = tf.layers.dense({
+                     // Y is qvalue, not action (only policy network has action as Y) 
+                     units:1, activation:'linear', kernelInitializer:'randomUniform'
+                 }).apply(H2);
+ 
+        // Model (regression)
+        console.warn("Q-network learning rate:",thisclass.qnet_lr);
+        var Model     = tf.model({inputs:X, outputs:U});
+        var Optimiser = tf.train.adam(thisclass.qnet_lr);
+        Model.compile({
+            loss:'meanSquaredError', optimizer:Optimiser
+        });
+        this.Network = Model;
+    }
+ 
+    // Save as original state
+    static save_as_orig_state(){
+        thisclass.Orig_Env   = clone(thisclass.Env);
+        thisclass.Orig_Actor = clone(thisclass.Actor);
+    }
+ 
+    // Load original state
+    static load_orig_state(){
+        thisclass.Env   = clone(thisclass.Orig_Env);
+        thisclass.Actor = clone(thisclass.Orig_Actor);
+    }
+ 
+    // Log square-one (first Env/Actor state) in q-network
+    static async log_first_q(runs_done, Rsum){
+        // Find best action for original Env/Actor state
+        var Env   = clone(thisclass.Orig_Env);
+        var Actor = clone(thisclass.Orig_Actor);
+        var S     = s(Env,Actor);
+        var Abest = await thisclass.get_best_action(S);
+ 
+        // Get q and print
+        var Qzero = await q(S,Abest);
+        log(`Best Q0: ${Qzero.toFixed(9)}, Rsum: ${Rsum.toFixed(1)}, `+
+            `runs done: ${runs_done} / ${thisclass.episodes}`);
+    }
+ 
+    // Train q-network
+    static async train_qnetwork(){
+        var eps          = thisclass.episodes;
+        var xrate        = thisclass.xrate;
+        var xrate_change = thisclass.xrate_change;
+        var Rsum, Actions;
+        thisclass.save_as_orig_state();
+ 
+        // Run 'episodes' times
+        for (let run=0; run<eps; run++){
+            thisclass.load_orig_state();
+            Rsum    = 0;
+            Actions = [];
+ 
+            // Do EP_LEN steps
+            for (let step=0; step<EP_LEN; step++){
+ 
+                // Choose Explore or Exploit
+                let to_explore = rand() < xrate;
+ 
+                if (to_explore){
+                    let A = thisclass.get_rand_action(s());
+                    // Can't q_update per action as in q-table, 
+                    // to much calculation in q-network, q_update after whole episode instead.
+                    let R = r(s(),A);
+                    Actions.push(A);
+                    thisclass.apply_action(thisclass.Env,thisclass.Actor,A);
+                    Rsum += R;
+                }
+                else{
+                    let A = await thisclass.get_best_action(s()); // Based on q-network
+                    // Can't q_update per action as in q-table, 
+                    // to much calculation in q-network, q_update after whole episode instead.
+                    let R = r(s(),A);
+                    Actions.push(A);
+                    thisclass.apply_action(thisclass.Env,thisclass.Actor,A);
+                    Rsum += R;
+                }
+                xrate -= xrate_change;
+            } // step
+ 
+            // q_update after whole run thru episode
+            thisclass.load_orig_state();
+            await thisclass.q_update(s(),Actions);
+ 
+            // Log training result
+            if (run==0 || (run+1)%thisclass.log_after==0)
+                await thisclass.log_first_q(run+1, Rsum);
+        } // run
+    }
+ 
+    // Infer from initial env state and actor state
+    static async infer(){
+        thisclass.load_orig_state();
+        log(`Original state: ${str(s())}`);
+        var Rtotal     = 0;
+        var Rmax       = thisclass.Rmax;
+        var Coords_Log = [];
+        var Orig_Env   = clone(thisclass.Orig_Env);
+ 
+        for (let i=0; i<EP_LEN; i++){
+            let S     = s();
+            let Abest = await thisclass.get_best_action(S);
+            Rtotal   += r(S,Abest);
+            let Actor = thisclass.apply_action(thisclass.Env, thisclass.Actor, Abest);
+            Coords_Log.push(Actor);
+            log(`Go to: ${DIRS[Abest]}, total R: ${Rtotal}, max R: ${Rmax}, `+
+                `state after: ${str(s())}`);            
+        }
+ 
+        // Make visual grid to see
+        var Grid = [["..","..",".."],["..","..",".."],["..","..",".."]];
+ 
+        for (let i=0; i<Coords_Log.length; i++){
+            let row = Coords_Log[i].row;
+            let col = Coords_Log[i].col;
+ 
+            if (Orig_Env[row][col]==0)
+                Grid[row][col] = "00";
+            else
+                Grid[row][col] = "YY";
+        }
+        Grid[0][0] = ">>";
+ 
+        log("\nActor travel path (>> is start, 00 is no R, YY is with R):");
+        log(Grid[0].join("\x20"));
+        log(Grid[1].join("\x20"));
+        log(Grid[2].join("\x20"));
+    }
+ 
+    // Run
+    static async run(){
+        // Data: Minimal Pacman 3x3 (2x2 is rather no meaning of circle)
+        //       Sample episode: Run in circle for max foods 
+        thisclass.Env   = [[0, 1, 1],
+                           [1, 0, 1],
+                           [1, 1, 1]];
+        thisclass.Actor = {row:0, col:0};
+        var Orig_Env    = clone(thisclass.Env);
+        var Orig_Actor  = clone(thisclass.Actor);
+ 
+        function get_max_reward_sum(){
+            var sum = 0; 
+ 
+            for (let i=0; i<NROW; i++)
+                for (let j=0; j<NCOL; j++)
+                    sum += Orig_Env[i][j];
+ 
+            return sum;
+        }
+ 
+        // Init Q-network, params to suit: 
+        //     Rows: 2^9 (env states) * 9 (actor states)
+        //     Cols: 4 (directions to move to)
+        thisclass.qnet_lr = 1e-3; // Learning rate q-network, 1e-3 is default in TF.js Adam
+        await thisclass.init_qnetwork();    
+        thisclass.B = 1e-3;            // Learning rate (Bellman)
+        thisclass.D = .8;              // Discount factor
+        thisclass.episodes      = 1e2; // Run through the episode this number of times
+        thisclass.xrate         = 1;   // Starting explore rate, 100%
+        thisclass.xrate_change  = 1 / (thisclass.episodes * EP_LEN); // After every action
+        thisclass.log_after     = thisclass.episodes / 100;          // Log test result after
+        thisclass.tuning_epochs = 1e1;        
+        thisclass.Rmax          = get_max_reward_sum();
+         
+        // Train
+        log("Training...");
+        await thisclass.train_qnetwork();
+ 
+        // Infer
+        log("\nInferring...");
+        await thisclass.infer();
+ 
+        log("Done.");
+    }
+}
+const s = qnetwork.s; // For convenient call
+const r = qnetwork.r; 
+const q = qnetwork.q;
+ 
+const thisclass = qnetwork;
+window.onload = function(){
+    thisclass.run();
+};
+</script>
