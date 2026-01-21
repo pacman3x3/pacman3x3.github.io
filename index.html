@@ -1,4 +1,4 @@
-<title>Pacman 3x3 - A Qnetwork Demo</title>
+<title>Shortsighted Pacman 3x3</title>
 <h1><center>Pacman 3x3</center></h1>
 <h1><center>
     Open DevTools to see<br>
@@ -316,16 +316,25 @@ class qnetwork {
  
         // Random params (weights, biases) for network
         // Layers 200*100 roughly equals 2^9(env) * 9(locs) * 4(actions)
+        // WARNING:
+        // DO NOT INIT TO ZEROS, USE RANDOM, THESE ARE PARAMS AND
+        // NOT THE DIRECT Q-VALUE OUTPUT AS IN THE Q-TABLE IMPLEMENTATION
+        // OR THE NETWORK NEVER CONVERGE AS OUTPUT IS STUCK AT ZERO:
+        //   - FEED TO ZERO OUTPUT, LOSS IS NON-ZERO
+        //   - BUT DERIVATIVE OF RELU IS ZERO, THUS BACKPROP GRAD * f'(RELU) -> 0 GRADS.
         var X  = tf.input({shape: [9+2+1]});
         var H1 = tf.layers.dense({
-                     units:200, activation:'relu', kernelInitializer:'randomUniform'
+                     units:200, activation:'relu', kernelInitializer:'randomUniform',
+                     biasInitializer:"randomUniform"
                  }).apply(X);
         var H2 = tf.layers.dense({
-                     units:100, activation:'relu', kernelInitializer:'randomUniform'
+                     units:100, activation:'relu', kernelInitializer:'randomUniform',
+                     biasInitializer:"randomUniform"
                  }).apply(H1);
         var U  = tf.layers.dense({
                      // Y is qvalue, not action (only policy network has action as Y) 
-                     units:1, activation:'linear', kernelInitializer:'randomUniform'
+                     units:1, activation:'linear', kernelInitializer:'randomUniform',
+                     biasInitializer:"randomUniform"
                  }).apply(H2);
  
         // Model (regression)
