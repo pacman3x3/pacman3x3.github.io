@@ -273,7 +273,8 @@ class qnetwork {
             let Actor_Next = clone(S.Actor);
             thisclass.apply_action(Env_Next,Actor_Next, A);
  
-            // Find max(Qnext)            
+            // Find max(Qnext)      
+            // TO-DO: CHANGE TO MAX-Q, NOT MAX-REWARD
             let Snext = s(Env_Next,Actor_Next);
             let Rnext = -Number.MAX_SAFE_INTEGER;
             let Anext;
