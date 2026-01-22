@@ -384,7 +384,7 @@ class qnetwork {
     }
  
     // Log square-one (first Env/Actor state) in q-network
-    static async log_first_q(runs_done, Rsum){
+    static async log_training_stats(runs_done, Rsum, avg_rsum){
         // Find best action for original Env/Actor state
         var Env   = clone(thisclass.Orig_Env);
         var Actor = clone(thisclass.Orig_Actor);
@@ -394,7 +394,7 @@ class qnetwork {
         // Get q and print
         var Qzero = await q(S,Abest);
         log(`Best Q0: ${Qzero.toFixed(9)}, Rsum: ${Rsum.toFixed(1)}, `+
-            `runs done: ${runs_done} / ${thisclass.episodes}`);
+            `runs done: ${runs_done} / ${thisclass.episodes}, avg_rsum = ${avg_rsum.toFixed(12)}`);
     }
  
     // Train q-network
@@ -404,6 +404,7 @@ class qnetwork {
         var xrate_change = thisclass.xrate_change;
         var Rsum, Actions;
         thisclass.save_as_orig_state();
+        var rsum_all_runs = 0;
  
         // Run 'episodes' times
         for (let run=0; run<eps; run++){
@@ -491,6 +492,7 @@ class qnetwork {
                     Target_Qs.push(q_target); // Use q_target instead of q2
 
                     Rsum += R;
+
                 }
                 xrate -= xrate_change;
             } // step
@@ -501,8 +503,11 @@ class qnetwork {
             await thisclass.q_update(Env_States,Actor_States,Actions,Target_Qs);
  
             // Log training result
+            rsum_all_runs += Rsum;
+            let avg_rsum = rsum_all_runs / (run+1);
+
             if (run==0 || (run+1)%thisclass.log_after==0)
-                await thisclass.log_first_q(run+1, Rsum);
+                await thisclass.log_training_stats(run+1, Rsum, avg_rsum);
         } // run
 
         // Chart of episode reward sum
