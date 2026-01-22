@@ -1,14 +1,15 @@
-<title>Shortsighted Pacman 3x3</title>
+<title>Q-learning Pacman 3x3</title>
 <h1><center>Pacman 3x3</center></h1>
 <h1><center>
-    Open DevTools to see<br>
-    WIP STATUS: TO-DO: CHANGE MAX REWARD -> MAX Q
+    Open DevTools to see Log <a id="Chart-Link" target="_blank">[Training...]</a><br>
+    Using q-network for exploit, and for max(q<sub>t+1</sub>)
 </center></h1>
 <div>
-    <center><img src="https://i.imgur.com/UZJ5PBU.png"></center>
-</div>
-<div>
-    <center>A Q-network demo by Dan D.Q. Dinh</center><br>
+    <center>
+        <img src="https://drive.google.com/thumbnail?id=1p9SVTAJ54kptquYFtKN_YNPteX4x1ThO&sz=w1000"
+        style="height:50vh;"><br>
+        A Q-network demo by Dan D.Q. Dinh
+    </center><br>
     <center>
         JS inside HTML: 
         <a target="_blank" href="https://github.com/pacman3x3/pacman3x3.github.io"
@@ -17,10 +18,11 @@
 </div>
 
 <!-- TensorFlow -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.22.0/tf.min.js" 
+<!--script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.22.0/tf.min.js"
     integrity="sha512-pLw8dUVrlqzbcwSDkXmF732uRzE8+VFKaTdoBYCqdvtK3q7wza1sQQQEMJP+jYOER4zU1MusZTT2bRzGVRDGZg==" 
     crossorigin="anonymous" referrerpolicy="no-referrer">
-</script>
+</script-->
+<script src="tf.min.js"></script>
 
 <!-- This Demo app -->
 <script>
@@ -73,6 +75,65 @@ function saq2tensor(S,A, value){
     var Exp = tf.tensor([[value]]);
     return [Inp,Exp];
 }
+
+// Google AI preview
+function splitIntoSizeChunks(arr, chunkSize) {
+    const result = [];
+
+    for (let i = 0; i < arr.length; i += chunkSize) {
+        const chunk = arr.slice(i, i + chunkSize);
+        result.push(chunk);
+    }
+    return result;
+}
+
+
+// Make QuickChart JSON to use in url
+function make_quickchart_json(Symbol,Series){
+    // Gemini, edited
+    const create_range = (start, end, step = 1) => {
+        const length = Math.floor((end - start) / step) + 1;
+        return Array.from({ length }, (_, index) => start + index * step);
+    };
+    var Data;
+
+    if (Series.length < 100){
+        Data = Series;
+    }
+    else{
+        let chunk_size = Math.floor(Series.length / 100);
+        let Chunks = splitIntoSizeChunks(Series,chunk_size);
+
+        for (let i=0; i<Chunks.length; i++){
+            Chunks[i] = Chunks[i].reduce((sum, cur) => sum + cur, 0);
+            Chunks[i] /= chunk_size;
+        }
+
+        Data = Chunks;
+    }
+
+    // QuickChart line chart
+    var Obj = {
+        "type": "line",
+        "data": {
+            "labels": create_range(0,Data.length),
+            "datasets": [{
+                "label": Symbol,
+                "data": [0].concat(Data)
+            }]
+        }
+    };
+    var Json = JSON.stringify(Obj);
+
+    // Remove doublequotes for QuickChart to work
+    Json = Json.replaceAll(`"type"`,"type");
+    Json = Json.replaceAll(`"data"`,"data");
+    Json = Json.replaceAll(`"labels"`,"labels");
+    Json = Json.replaceAll(`"datasets"`,"datasets");
+    Json = Json.replaceAll(`"label"`,"label");
+    Json = Json.replaceAll(`"`, `'`);
+    return Json;
+}
  
 function $_____CLASS_____(){}
  
@@ -94,6 +155,7 @@ class qnetwork {
     static xrate_change;  // Reduction of xrate after each action
     static tuning_epochs; // For learning updated q-value
     static qnet_lr;       // Q-network learning rate
+    static Rsumlog = [];
  
     // Set a value in q-network
     // S: State of both env and actor
@@ -249,7 +311,7 @@ class qnetwork {
         var Amax;
  
         for (let A=0; A<A_MAX; A++){
-            let Q = await q(S,A);
+            let Q = await q(S,A); // Correct, using q-value
  
             if (Valid_Actions.indexOf(A)>=0 && Q>Qmax){
                 Qmax = Q;
@@ -260,52 +322,14 @@ class qnetwork {
     }
  
     // Q-network update at S:A (whole episode)
-    static async q_update(S, Actions){
-        var A, States=[], Qnews=[];
- 
-        for (A of Actions){
-            // Q = Q + B*M = Q + B*(R+D*max(Qnext) - Q)
-            let B = thisclass.B; // Learning rate
-            let R = r(S,A);      // Reward
-            let D = thisclass.D; // Discount
- 
-            // Find next state
-            let Env        = S.Env;
-            let Actor      = S.Actor;
-            let Env_Next   = clone(S.Env);
-            let Actor_Next = clone(S.Actor);
-            thisclass.apply_action(Env_Next,Actor_Next, A);
- 
-            // Find max(Qnext)      
-            // TO-DO: CHANGE TO MAX-Q (USED IN TEMPORAL DIFF), NOT MAX-REWARD
-            let Snext = s(Env_Next,Actor_Next);
-            let Rnext = -Number.MAX_SAFE_INTEGER;
-            let Anext;
-            let log_validity;
- 
-            for (let A2=0; A2<A_MAX; A2++){ // In this Pacman game, there's always a valid move.
-                let Rtest = r(Snext,A2, log_validity=false);
- 
-                if (Rtest > Rnext){
-                    Rnext = Rtest;
-                    Anext = A;
-                }
-            }
-            let Qnext = await q(Snext,Anext);
- 
-            // Value to update q-network: Qnew (aka Qtarget)
-            let Scur = s(Env,Actor);
-            let Qcur = await q(Scur,A);
-            let Qnew = Qcur + B*(R+D*Qnext - Qcur);
-            States.push(Scur);
-            Qnews .push(Qnew);
- 
-            // Next state
-            S = s(Env_Next,Actor_Next);
-        }
- 
+    static async q_update(Env_States,Actor_States, Actions,Target_Qs){
         // Train q-network by whole episode experience
-        await thisclass.set_qvalue(States,Actions, Qnews);
+        var States = [];
+
+        for (let i=0; i<Env_States.length; i++)
+            States.push(s(Env_States[i],Actor_States[i]));
+
+        await thisclass.set_qvalue(States,Actions, Target_Qs);
     }
  
     // Init q-network (sizes: 2^9*9 rows, 4 cols)
@@ -383,23 +407,58 @@ class qnetwork {
  
         // Run 'episodes' times
         for (let run=0; run<eps; run++){
+            // UI
+            let Ele = document.querySelector("#Chart-Link");
+            Ele.innerHTML = `[Run ${run+1}<sub><small>explore`+
+                `${Math.floor(Math.max(xrate*100,10))}</small></sub> / ${eps}]`;
+
+            // Traing
             thisclass.load_orig_state();
             Rsum    = 0;
             Actions = [];
+            let Env_States = [];
+            let Actor_States = [];
+            let Target_Qs = [];
  
             // Do EP_LEN steps
             for (let step=0; step<EP_LEN; step++){
  
                 // Choose Explore or Exploit
-                let to_explore = rand() < xrate;
+                // Leave 10% explore always at the end, avoid failure at
+                // training end.
+                // to_explore = rand() < xrate + .1, is not good coz
+                // 10% of runs at beginning is always exploring.
+                let to_explore = rand() < Math.max(xrate, .1);
  
                 if (to_explore){
                     let A = thisclass.get_rand_action(s());
                     // Can't q_update per action as in q-table, 
                     // to much calculation in q-network, q_update after whole episode instead.
                     let R = r(s(),A);
+                    Env_States.push(thisclass.Env);
+                    Actor_States.push(thisclass.Actor);
                     Actions.push(A);
+
+                    // qTarget = q1 + rr*td
+                    // td = [rw1 + dc*q2max] - q1
+                    let rw1 = R;
+                    let q1 = await q(s(),A);
+
                     thisclass.apply_action(thisclass.Env,thisclass.Actor,A);
+                    let a2max = await thisclass.get_best_action(s());
+                    let q2max = await q(s(),a2max);
+                    let td = (rw1 + thisclass.D*q2max) - q1; // Unused
+                    let q_update = q1 + thisclass.B * td; // Unused
+
+                    // Q-network has optimizer, it knows q1 indirectly as the
+                    // result of the network, just supply q_target to it is enough,
+                    // and it has its own lr to replace the q-table's learning rate.
+                    // Applying full q2 to q-network will make it confused due to
+                    // being applied with Bellman logic (q-table algorithmic logic)
+                    // and gradient-based optimization.
+                    let q_target = rw1 + thisclass.D*q2max
+                    Target_Qs.push(q_target); // Use q_target instead of q2
+
                     Rsum += R;
                 }
                 else{
@@ -407,21 +466,51 @@ class qnetwork {
                     // Can't q_update per action as in q-table, 
                     // to much calculation in q-network, q_update after whole episode instead.
                     let R = r(s(),A);
+                    Env_States.push(thisclass.Env);
+                    Actor_States.push(thisclass.Actor);
                     Actions.push(A);
+
+                    // qTarget = q1 + rr*td
+                    // td = [rw1 + dc*q2max] - q1
+                    let rw1 = R;
+                    let q1 = await q(s(),A);
+
                     thisclass.apply_action(thisclass.Env,thisclass.Actor,A);
+                    let a2max = await thisclass.get_best_action(s());
+                    let q2max = await q(s(),a2max);
+                    let td = (rw1 + thisclass.D*q2max) - q1; // Unused
+                    let q_update = q1 + thisclass.B * td; // Unused
+
+                    // Q-network has optimizer, it knows q1 indirectly as the
+                    // result of the network, just supply q_target to it is enough,
+                    // and it has its own lr to replace the q-table's learning rate.
+                    // Applying full q2 to q-network will make it confused due to
+                    // being applied with Bellman logic (q-table algorithmic logic)
+                    // and gradient-based optimization.
+                    let q_target = rw1 + thisclass.D*q2max
+                    Target_Qs.push(q_target); // Use q_target instead of q2
+
                     Rsum += R;
                 }
                 xrate -= xrate_change;
             } // step
+            thisclass.Rsumlog.push(Rsum)
  
             // q_update after whole run thru episode
             thisclass.load_orig_state();
-            await thisclass.q_update(s(),Actions);
+            await thisclass.q_update(Env_States,Actor_States,Actions,Target_Qs);
  
             // Log training result
             if (run==0 || (run+1)%thisclass.log_after==0)
                 await thisclass.log_first_q(run+1, Rsum);
         } // run
+
+        // Chart of episode reward sum
+        var Quickchart_Cfg = make_quickchart_json("Rsum",thisclass.Rsumlog);
+        var Url = `https://quickchart.io/chart?c=${Quickchart_Cfg}`
+        var Ele = document.querySelector("#Chart-Link")
+        Ele.setAttribute("href",Url);
+        Ele.innerHTML = "\x20& see Chart";
     }
  
     // Infer from initial env state and actor state
@@ -435,7 +524,7 @@ class qnetwork {
  
         for (let i=0; i<EP_LEN; i++){
             let S     = s();
-            let Abest = await thisclass.get_best_action(S);
+            let Abest = await thisclass.get_best_action(S); // From q-network
             Rtotal   += r(S,Abest);
             let Actor = thisclass.apply_action(thisclass.Env, thisclass.Actor, Abest);
             Coords_Log.push(Actor);
@@ -491,11 +580,11 @@ class qnetwork {
         await thisclass.init_qnetwork();    
         thisclass.B = 1e-3;            // Learning rate (Bellman)
         thisclass.D = .8;              // Discount factor
-        thisclass.episodes      = 1e2; // Run through the episode this number of times
+        thisclass.episodes      = 5000; // Run through the episode this number of times
         thisclass.xrate         = 1;   // Starting explore rate, 100%
         thisclass.xrate_change  = 1 / (thisclass.episodes * EP_LEN); // After every action
         thisclass.log_after     = thisclass.episodes / 100;          // Log test result after
-        thisclass.tuning_epochs = 1e1;        
+        thisclass.tuning_epochs = 1; // Once only, avoid sticking with early q values
         thisclass.Rmax          = get_max_reward_sum();
          
         // Train
